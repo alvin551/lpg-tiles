@@ -1,44 +1,41 @@
 # lpg-tiles
 
-Rolling UK PMTiles basemap for the [LPG Finder](https://github.com/alvin551/lpg-finder-nuxt) app, plus a small CORS-proxy Worker so browser clients can actually read it.
+Scheduled rebuild + upload of the UK PMTiles basemap for the [LPG Finder](https://github.com/alvin551/lpg-finder-nuxt) app. The archive lives on Cloudflare R2 (public bucket, unlimited free egress). This repo is only the automation — the tile file itself doesn't live here.
 
-## Layout
+## What runs
 
-- `.github/workflows/refresh-tiles.yml` — twice-yearly rebuild (1 Jan, 1 Jul) of the UK extract from Protomaps' public planet build, uploaded to the `tiles-latest` rolling release.
-- `worker/` — Cloudflare Worker that proxies the GitHub release asset with `Access-Control-Allow-Origin`. The app points its `NUXT_PUBLIC_PMTILES_URL` at this Worker, not at GitHub directly.
+`.github/workflows/refresh-tiles.yml` fires twice a year (1 Jan, 1 Jul at 03:00 UTC) and can be triggered on demand from the Actions tab. Each run:
 
-## Why the proxy
+1. Installs the latest `pmtiles` CLI.
+2. Clips a UK + Ireland bbox from Protomaps' public daily planet build at maxzoom 14 (~1.5 GB output).
+3. Uploads it to R2 via the AWS CLI (S3-compatible API, handles multipart).
 
-GitHub's release-asset URLs 302-redirect to `release-assets.githubusercontent.com`, which doesn't send CORS headers. Browser fetches fail. The Worker sits in front, re-issues the request server-side (no CORS applies), and adds the headers MapLibre needs. Cloudflare's edge cache also deduplicates repeat range requests.
+R2's object URL is stable (`https://pub-<hash>.r2.dev/uk.pmtiles`), so the app never needs a redeploy when tiles refresh — cached viewers pick up new data on their next cache miss.
 
-## Deploying the Worker
+## One-time setup
 
-One-time setup on your machine, from `worker/`:
+### 1. Create an R2 API token
+
+Cloudflare dashboard → *R2* → *Manage R2 API Tokens* → *Create API Token* → *Object Read & Write*, scoped to the `lpg-tiles` bucket. Copy the **Access Key ID**, **Secret Access Key**, and your **account ID**.
+
+### 2. Add three secrets and one variable to this repo
+
+*Settings* → *Secrets and variables* → *Actions*.
+
+Secrets (encrypted):
+- `CLOUDFLARE_ACCOUNT_ID`
+- `R2_ACCESS_KEY_ID`
+- `R2_SECRET_ACCESS_KEY`
+
+Variable (plain):
+- `R2_BUCKET` — e.g. `lpg-tiles`
+
+### 3. Trigger the first run
+
+*Actions* → *Refresh UK tiles* → *Run workflow*. Takes ~5 min (extract) + ~1–3 min (upload) from a runner. Verify with:
 
 ```bash
-pnpm install
-pnpm dlx wrangler login   # browser OAuth; no card required for Workers free
-pnpm run deploy
+curl -I https://pub-<your-r2-hash>.r2.dev/uk.pmtiles
 ```
 
-Wrangler prints a URL in the shape:
-```
-https://lpg-tiles-proxy.<your-subdomain>.workers.dev
-```
-
-That's what goes into the app's `NUXT_PUBLIC_PMTILES_URL`.
-
-## Refreshing the tiles
-
-Normally handled by `refresh-tiles.yml` on the cron schedule. For an ad-hoc refresh:
-
-- *Actions* → *Refresh UK tiles* → *Run workflow*
-
-The Worker doesn't need redeploying — it just re-proxies whatever `tiles-latest` currently points at.
-
-## Stable URLs
-
-| Consumer | URL |
-|---|---|
-| Raw GitHub asset (CORS-blocked in browsers) | `https://github.com/alvin551/lpg-tiles/releases/download/tiles-latest/uk.pmtiles` |
-| Worker-proxied (use this from browser clients) | `https://lpg-tiles-proxy.<your-subdomain>.workers.dev` |
+After that, the app's `NUXT_PUBLIC_PMTILES_URL` points at the R2 URL and everything's automatic.

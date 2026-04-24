@@ -9,10 +9,6 @@ on:
     # Allow manual runs from the Actions UI for ad-hoc refreshes.
     workflow_dispatch:
 
-permissions:
-    # Needed so the default GITHUB_TOKEN can update release assets.
-    contents: write
-
 jobs:
     refresh:
         runs-on: ubuntu-latest
@@ -40,29 +36,26 @@ jobs:
 
             - name: Extract UK PMTiles
               run: |
-                  # bbox spans UK + Ireland + a coastal buffer so the
-                  # maxBounds-clamped map in the app never shows blank
-                  # tiles at the edges. Output stays under the 2 GB
-                  # GitHub release-asset cap at maxzoom 14 because the
-                  # extra span is almost entirely sea.
+                  # bbox spans UK + Ireland + a coastal buffer. Output
+                  # stays under 2 GB at maxzoom 14 because the extra span
+                  # is almost entirely sea.
                   ./pmtiles extract \
                     "https://build.protomaps.com/${{ steps.date.outputs.build_date }}.pmtiles" \
                     uk.pmtiles \
                     --bbox=-11.0,49.5,2.2,61.0 \
                     --maxzoom=14
 
-            - name: Replace rolling release asset
+            - name: Upload to Cloudflare R2
               env:
-                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-                  # gh infers the target repo from a local git checkout
-                  # or GH_REPO. We don't clone anything here, so set it
-                  # explicitly to the repo this workflow runs in.
-                  GH_REPO: ${{ github.repository }}
+                  # R2 is S3-compatible, so the AWS CLI (pre-installed on
+                  # GitHub runners) handles multipart upload for us. Keys
+                  # come from an R2 API Token scoped to the lpg-tiles
+                  # bucket — see the tiles repo README for the token
+                  # creation + secret-wiring walkthrough.
+                  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+                  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+                  AWS_DEFAULT_REGION: auto
               run: |
-                  # Create the release once; subsequent runs just
-                  # overwrite the asset (--clobber).
-                  gh release view tiles-latest >/dev/null 2>&1 || \
-                    gh release create tiles-latest \
-                      --title "UK tiles" \
-                      --notes "Rolling release - UK PMTiles extract at maxzoom 14. Rebuilt automatically by refresh-tiles.yml."
-                  gh release upload tiles-latest uk.pmtiles --clobber
+                  aws s3 cp uk.pmtiles "s3://${{ vars.R2_BUCKET }}/uk.pmtiles" \
+                    --endpoint-url "https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com" \
+                    --no-progress
