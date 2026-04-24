@@ -36,14 +36,18 @@ jobs:
 
             - name: Extract UK PMTiles
               run: |
-                  # bbox spans UK + Ireland + a coastal buffer. Output
-                  # stays under 2 GB at maxzoom 14 because the extra span
-                  # is almost entirely sea.
+                  # bbox spans UK + Ireland + a coastal buffer. We
+                  # inherit the planet's full max zoom (currently 15),
+                  # which is what enables building footprints and
+                  # individual fuel-station POIs at street level.
+                  # Output is ~3 GB; comfortably inside R2's 10 GB
+                  # free tier. (The earlier maxzoom=14 cap was a
+                  # GitHub-Release-only workaround for the 2 GB
+                  # per-asset limit; no longer relevant on R2.)
                   ./pmtiles extract \
                     "https://build.protomaps.com/${{ steps.date.outputs.build_date }}.pmtiles" \
                     uk.pmtiles \
-                    --bbox=-11.0,49.5,2.2,61.0 \
-                    --maxzoom=14
+                    --bbox=-11.0,49.5,2.2,61.0
 
             - name: Upload to Cloudflare R2
               env:
