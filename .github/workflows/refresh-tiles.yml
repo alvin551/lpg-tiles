@@ -49,6 +49,10 @@ jobs:
             - name: Replace rolling release asset
               env:
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  # gh infers the target repo from a local git checkout
+                  # or GH_REPO. We don't clone anything here, so set it
+                  # explicitly to the repo this workflow runs in.
+                  GH_REPO: ${{ github.repository }}
               run: |
                   # Create the release once; subsequent runs just
                   # overwrite the asset (--clobber).
