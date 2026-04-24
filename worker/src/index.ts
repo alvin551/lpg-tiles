@@ -48,19 +48,14 @@ export default {
             method: request.method,
             headers: upstreamHeaders,
             redirect: 'follow',
-            // Cache successful responses at CF's edge so popular tile
-            // ranges don't round-trip to GitHub every time. 4xx/5xx
-            // explicitly skip the cache — a transient upstream error
-            // must not pin itself for 24 hours (that was the "stuck
-            // 404" bug we hit during bring-up).
-            cf: {
-                cacheEverything: true,
-                cacheTtlByStatus: {
-                    '200-299': 86400,
-                    '300-399': 60,
-                    '400-599': 0,
-                },
-            },
+            // cache: 'no-store' is deliberate. Cloudflare's subrequest
+            // cache is keyed by the upstream URL, so if a stale 4xx
+            // ever sticks there (as happened during bring-up), even
+            // `cacheTtlByStatus` can't evict it — TTL overrides only
+            // apply to new cache writes, not to lookups of existing
+            // entries. The outer response cache (Cache-Control below,
+            // keyed by the client URL) still dedupes repeat hits.
+            cache: 'no-store',
         });
 
         const responseHeaders = new Headers(upstream.headers);
