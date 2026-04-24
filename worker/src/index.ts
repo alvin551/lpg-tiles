@@ -48,16 +48,34 @@ export default {
             method: request.method,
             headers: upstreamHeaders,
             redirect: 'follow',
-            // @ts-expect-error cf is a Cloudflare-specific RequestInit field
-            cf: { cacheEverything: true, cacheTtl: 86400 },
+            // Cache successful responses at CF's edge so popular tile
+            // ranges don't round-trip to GitHub every time. 4xx/5xx
+            // explicitly skip the cache — a transient upstream error
+            // must not pin itself for 24 hours (that was the "stuck
+            // 404" bug we hit during bring-up).
+            cf: {
+                cacheEverything: true,
+                cacheTtlByStatus: {
+                    '200-299': 86400,
+                    '300-399': 60,
+                    '400-599': 0,
+                },
+            },
         });
 
         const responseHeaders = new Headers(upstream.headers);
         for (const [k, v] of Object.entries(CORS_HEADERS)) {
             responseHeaders.set(k, v);
         }
-        // Browser cache hint independent of edge cache above.
-        responseHeaders.set('Cache-Control', 'public, max-age=86400, immutable');
+        // Only cache happy responses. If we send `public, max-age=…` on
+        // a 404, Cloudflare's edge pins that 404 for the full window and
+        // every client keeps seeing it until TTL expires — even after
+        // the upstream recovers.
+        if (upstream.ok) {
+            responseHeaders.set('Cache-Control', 'public, max-age=86400, immutable');
+        } else {
+            responseHeaders.set('Cache-Control', 'no-store');
+        }
 
         return new Response(upstream.body, {
             status: upstream.status,
