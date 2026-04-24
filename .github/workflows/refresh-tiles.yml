@@ -1,0 +1,59 @@
+name: Refresh UK tiles
+
+on:
+    # Every 6 months at 03:00 UTC on the 1st of Jan and Jul. Protomaps
+    # typically publishes the daily planet build by ~03:00 UTC; we read
+    # 2 days behind to be safely past publication.
+    schedule:
+        - cron: '0 3 1 1,7 *'
+    # Allow manual runs from the Actions UI for ad-hoc refreshes.
+    workflow_dispatch:
+
+permissions:
+    # Needed so the default GITHUB_TOKEN can update release assets.
+    contents: write
+
+jobs:
+    refresh:
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+
+        steps:
+            - name: Determine planet build date (2 days ago, UTC)
+              id: date
+              run: |
+                  echo "build_date=$(date -u -d '2 days ago' +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
+            - name: Install latest pmtiles CLI
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  # Pull whatever the newest go-pmtiles release is — the
+                  # CLI is stable and backward-compatible, so tracking
+                  # latest is safer than pinning a version that drifts.
+                  TAG=$(gh release view --repo protomaps/go-pmtiles --json tagName -q '.tagName')
+                  VERSION="${TAG#v}"
+                  curl -sSL -o pmtiles.tar.gz \
+                    "https://github.com/protomaps/go-pmtiles/releases/download/${TAG}/go-pmtiles_${VERSION}_Linux_x86_64.tar.gz"
+                  tar -xzf pmtiles.tar.gz pmtiles
+                  chmod +x pmtiles
+
+            - name: Extract UK PMTiles
+              run: |
+                  ./pmtiles extract \
+                    "https://build.protomaps.com/${{ steps.date.outputs.build_date }}.pmtiles" \
+                    uk.pmtiles \
+                    --bbox=-8.8,49.5,2.2,61.0 \
+                    --maxzoom=14
+
+            - name: Replace rolling release asset
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  # Create the release once; subsequent runs just
+                  # overwrite the asset (--clobber).
+                  gh release view tiles-latest >/dev/null 2>&1 || \
+                    gh release create tiles-latest \
+                      --title "UK tiles" \
+                      --notes "Rolling release - UK PMTiles extract at maxzoom 14. Rebuilt automatically by refresh-tiles.yml."
+                  gh release upload tiles-latest uk.pmtiles --clobber
