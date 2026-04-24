@@ -55,7 +55,19 @@ jobs:
                   AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
                   AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
                   AWS_DEFAULT_REGION: auto
+                  ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+                  BUCKET: ${{ vars.R2_BUCKET }}
               run: |
-                  aws s3 cp uk.pmtiles "s3://${{ vars.R2_BUCKET }}/uk.pmtiles" \
-                    --endpoint-url "https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com" \
-                    --no-progress
+                  set -euo pipefail
+                  echo "==> Source file"
+                  ls -lh uk.pmtiles
+
+                  echo "==> Pre-upload bucket listing"
+                  aws s3 ls "s3://${BUCKET}/" --endpoint-url "${ENDPOINT_URL}" || true
+
+                  echo "==> Uploading"
+                  aws s3 cp uk.pmtiles "s3://${BUCKET}/uk.pmtiles" \
+                    --endpoint-url "${ENDPOINT_URL}"
+
+                  echo "==> Post-upload bucket listing (expect uk.pmtiles)"
+                  aws s3 ls "s3://${BUCKET}/" --endpoint-url "${ENDPOINT_URL}"
