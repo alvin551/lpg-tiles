@@ -40,10 +40,15 @@ jobs:
 
             - name: Extract UK PMTiles
               run: |
+                  # bbox spans UK + Ireland + a coastal buffer so the
+                  # maxBounds-clamped map in the app never shows blank
+                  # tiles at the edges. Output stays under the 2 GB
+                  # GitHub release-asset cap at maxzoom 14 because the
+                  # extra span is almost entirely sea.
                   ./pmtiles extract \
                     "https://build.protomaps.com/${{ steps.date.outputs.build_date }}.pmtiles" \
                     uk.pmtiles \
-                    --bbox=-8.8,49.5,2.2,61.0 \
+                    --bbox=-11.0,49.5,2.2,61.0 \
                     --maxzoom=14
 
             - name: Replace rolling release asset
