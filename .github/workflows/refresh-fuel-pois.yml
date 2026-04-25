@@ -1,0 +1,87 @@
+name: Refresh fuel POIs
+
+# Pulls every UK fuel + EV-charging station from OSM (via Overpass) and
+# parks the result on R2 as a single gzipped GeoJSON. The app reads it
+# as a clustered MapLibre source on top of the basemap, which means
+# every station shows up regardless of Protomaps' per-feature min_zoom
+# bias — small local stations like the Murco at SA5 4RA were getting
+# stripped out of the z14 PMTiles extract.
+#
+# Daily refresh because the file is small (~700 KB gzipped) and OSM
+# fuel-station edits are common enough that monthly would feel stale.
+
+on:
+    schedule:
+        # 04:00 UTC daily — well clear of the tile workflow's 03:00 slot
+        # so we don't bunch up R2 writes / Overpass quota.
+        - cron: '0 4 * * *'
+    workflow_dispatch:
+
+jobs:
+    refresh:
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+
+        steps:
+            - name: Query Overpass for UK fuel + charging stations
+              run: |
+                  # bbox matches the tile workflow: UK + Ireland +
+                  # coastal buffer. nwr selects nodes/ways/relations;
+                  # `out center tags` gives a single coord per element
+                  # (centroid for ways/relations) plus the OSM tags.
+                  curl -sS --fail --retry 3 --retry-delay 10 \
+                    -G "https://overpass-api.de/api/interpreter" \
+                    --data-urlencode 'data=[out:json][timeout:60];(nwr["amenity"~"^(fuel|charging_station)$"](49.5,-11.0,61.0,2.2););out center tags;' \
+                    -o overpass.json
+                  echo "Overpass response: $(stat -c%s overpass.json) bytes"
+
+            - name: Convert to lean GeoJSON
+              run: |
+                  # Strip Overpass envelope + drop tags we don't render
+                  # so the file stays small. Each feature ends up as a
+                  # Point with kind / name / brand only.
+                  node -e "
+                  const fs = require('node:fs');
+                  const d = JSON.parse(fs.readFileSync('overpass.json', 'utf8'));
+                  const features = d.elements
+                      .map(e => ({
+                          type: 'Feature',
+                          geometry: {
+                              type: 'Point',
+                              coordinates: [e.lon ?? e.center?.lon, e.lat ?? e.center?.lat],
+                          },
+                          properties: {
+                              kind: e.tags?.amenity,
+                              name: e.tags?.name ?? null,
+                              brand: e.tags?.brand ?? null,
+                          },
+                      }))
+                      .filter(f => Number.isFinite(f.geometry.coordinates[0]) && Number.isFinite(f.geometry.coordinates[1]));
+                  fs.writeFileSync('uk-fuel.geojson', JSON.stringify({ type: 'FeatureCollection', features }));
+                  console.log('features:', features.length);
+                  console.log('size:', fs.statSync('uk-fuel.geojson').size);
+                  "
+
+            - name: Gzip
+              run: |
+                  # gzip in place; we'll set Content-Encoding: gzip on
+                  # the upload so browsers decompress transparently.
+                  gzip -9 -k uk-fuel.geojson
+                  echo "Compressed: $(stat -c%s uk-fuel.geojson.gz) bytes"
+
+            - name: Upload to Cloudflare R2
+              env:
+                  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+                  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+                  AWS_DEFAULT_REGION: auto
+                  ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+                  BUCKET: ${{ vars.R2_BUCKET }}
+              run: |
+                  set -euo pipefail
+                  aws s3 cp uk-fuel.geojson.gz "s3://${BUCKET}/uk-fuel.geojson" \
+                    --endpoint-url "${ENDPOINT_URL}" \
+                    --content-type "application/geo+json" \
+                    --content-encoding "gzip" \
+                    --cache-control "public,max-age=86400"
+                  echo "==> Bucket listing"
+                  aws s3 ls "s3://${BUCKET}/" --endpoint-url "${ENDPOINT_URL}"
